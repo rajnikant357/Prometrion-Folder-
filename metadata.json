@@ -1,0 +1,6 @@
+{
+  "name": "Folder",
+  "description": "100% offline file manager with encrypted storage vault, zero-knowledge privacy, comprehensive category management, fast search, file sharing, and rich previewer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

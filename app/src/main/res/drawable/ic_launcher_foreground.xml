@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Folder Tab & Back Body (Deep cyan-blue frosted glass base) -->
+    <path
+        android:pathData="M27,33 C27,30.8 28.8,29 31,29 L47,29 C49,29 50.8,30.2 51.6,32 L54,36.5 L77,36.5 C79.8,36.5 82,38.7 82,41.5 L82,50 L26,50 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="27"
+                android:startY="29"
+                android:endX="82"
+                android:endY="50"
+                android:type="linear">
+                <item android:color="#9038BDF8" android:offset="0.0" />
+                <item android:color="#700284C7" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Translucent Frosted Document Peeking Out -->
+    <path
+        android:pathData="M35,34 L63,34 C65,34 66.5,35.5 66.5,37.5 L66.5,49 L32,49 L32,37.5 C32,35.5 33.5,34 35,34 Z"
+        android:fillColor="#80E0F2FE" />
+    <path
+        android:pathData="M38,39 L56,39"
+        android:strokeColor="#A0BAE6FD"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M38,43 L50,43"
+        android:strokeColor="#A0BAE6FD"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+
+    <!-- Glassmorphic Front Folder Body (Frosted Light Blue) -->
+    <path
+        android:pathData="M26,43 L82,43 C84.8,43 87,45.2 87,48 L87,74 C87,76.8 84.8,79 82,79 L26,79 C23.2,79 21,76.8 21,74 L21,48 C21,45.2 23.2,43 26,43 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="21"
+                android:startY="43"
+                android:endX="87"
+                android:endY="79"
+                android:type="linear">
+                <item android:color="#E0BAE6FD" android:offset="0.0" />
+                <item android:color="#B87DD3FC" android:offset="0.45" />
+                <item android:color="#C838BDF8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Glass Specular Reflection Highlight (Diagonal glossy beam) -->
+    <path
+        android:pathData="M26,43 L42,43 L31,79 L23.5,77 C22,75.5 21,73.5 21,71 L21,48 C21,45.2 23.2,43 26,43 Z"
+        android:fillColor="#35FFFFFF" />
+
+    <!-- Frosted Top Rim Light (Bright crisp edge reflection) -->
+    <path
+        android:pathData="M24,44 L84,44"
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="1.2"
+        android:strokeLineCap="round" />
+
+    <!-- Minimal Modern Glass Folder Handle/Pill Accent -->
+    <path
+        android:pathData="M48,58 L60,58"
+        android:strokeColor="#60FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round" />
+</vector>
