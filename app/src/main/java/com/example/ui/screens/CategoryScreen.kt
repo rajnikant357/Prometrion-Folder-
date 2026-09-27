@@ -1,11 +1,15 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -14,6 +18,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.GridView
@@ -22,6 +28,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.FileCategory
 import com.example.data.model.FileItem
+import com.example.ui.components.CompressDialog
 import com.example.ui.components.DeleteConfirmationDialog
 import com.example.ui.components.FileGridItem
 import com.example.ui.components.FileListItem
@@ -74,10 +83,32 @@ fun CategoryScreen(
     var selectedFileForRename by remember { mutableStateOf<File?>(null) }
     var selectedFileForDelete by remember { mutableStateOf<File?>(null) }
     var selectedFileForVault by remember { mutableStateOf<File?>(null) }
+    var selectedFileForCompress by remember { mutableStateOf<File?>(null) }
     var selectedFileForProperties by remember { mutableStateOf<File?>(null) }
     var selectedFileForOpenWith by remember { mutableStateOf<File?>(null) }
+    var selectedDateFilter by remember { mutableStateOf("all") }
 
-    val totalSize = remember(items) { items.sumOf { it.size } }
+    BackHandler { onNavigateBack() }
+
+    val now = remember { System.currentTimeMillis() }
+    val oneDayMs = 24 * 60 * 60 * 1000L
+    val sevenDaysMs = 7 * oneDayMs
+
+    val filteredItems = remember(items, selectedDateFilter) {
+        when (selectedDateFilter) {
+            "today" -> items.filter { (now - it.lastModified) < oneDayMs }
+            "yesterday" -> items.filter { (now - it.lastModified) in oneDayMs..(2 * oneDayMs) }
+            "this_week" -> items.filter { (now - it.lastModified) < sevenDaysMs }
+            "older" -> items.filter { (now - it.lastModified) >= sevenDaysMs }
+            else -> items
+        }
+    }
+
+    val totalSize = remember(filteredItems) { filteredItems.sumOf { it.size } }
+
+    val dateFilters = remember {
+        listOf("all" to "All", "today" to "Today", "yesterday" to "Yesterday", "this_week" to "This Week", "older" to "Older")
+    }
 
     Scaffold(
         topBar = {
@@ -89,7 +120,7 @@ fun CategoryScreen(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
                         Text(
-                            text = "${items.size} files • ${FileItem.formatFileSize(totalSize)}",
+                            text = "${filteredItems.size} files • ${FileItem.formatFileSize(totalSize)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -129,82 +160,123 @@ fun CategoryScreen(
             )
         }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (isLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(36.dp),
-                        strokeWidth = 3.dp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            } else if (items.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.InsertDriveFile,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "No ${category.displayName.lowercase()} found",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else if (isGrid) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 100.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Date Filter Chips
+            if (items.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(items) { item ->
-                        FileGridItem(
-                            item = item,
-                            onClick = {
-                                viewModel.recordFileAccess(item.file)
-                                onOpenFile(item.file)
-                            }
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 16.dp)
-                ) {
-                    items(items) { item ->
-                        FileListItem(
-                            item = item,
-                            onClick = {
-                                viewModel.recordFileAccess(item.file)
-                                onOpenFile(item.file)
-                            },
-                            onMoveToVault = { selectedFileForVault = item.file },
-                            onRename = { selectedFileForRename = item.file },
-                            onDelete = { selectedFileForDelete = item.file },
-                            onCopy = { viewModel.setClipboard(item.file, isCut = false) },
-                            onCut = { viewModel.setClipboard(item.file, isCut = true) },
-                            onCompress = { viewModel.compressFiles(listOf(item.file), item.file.nameWithoutExtension) },
-                            onExtract = { viewModel.extractArchive(item.file) },
-                            onProperties = { selectedFileForProperties = item.file },
-                            onShare = { FileShareUtils.shareFile(context, item.file) },
-                            onOpenWith = { selectedFileForOpenWith = item.file },
-                            onInstallApk = { FileOpener.installApk(context, item.file) }
+                    dateFilters.forEach { (filterKey, filterLabel) ->
+                        FilterChip(
+                            selected = selectedDateFilter == filterKey,
+                            onClick = { selectedDateFilter = filterKey },
+                            label = { Text(filterLabel) },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         )
                     }
                 }
             }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f)
+            ) {
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(36.dp),
+                            strokeWidth = 3.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else if (filteredItems.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.InsertDriveFile,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(56.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = if (items.isEmpty()) "No ${category.displayName.lowercase()} found" else "No items match date filter",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else if (isGrid) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 100.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredItems) { item ->
+                            FileGridItem(
+                                item = item,
+                                onClick = {
+                                    viewModel.recordFileAccess(item.file)
+                                    onOpenFile(item.file)
+                                }
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        items(filteredItems) { item ->
+                            FileListItem(
+                                item = item,
+                                onClick = {
+                                    viewModel.recordFileAccess(item.file)
+                                    onOpenFile(item.file)
+                                },
+                                onMoveToVault = { selectedFileForVault = item.file },
+                                onRename = { selectedFileForRename = item.file },
+                                onDelete = { selectedFileForDelete = item.file },
+                                onCopy = { viewModel.setClipboard(item.file, isCut = false) },
+                                onCut = { viewModel.setClipboard(item.file, isCut = true) },
+                                onCompress = { selectedFileForCompress = item.file },
+                                onExtract = { viewModel.extractArchive(item.file) },
+                                onProperties = { selectedFileForProperties = item.file },
+                                onShare = { FileShareUtils.shareFile(context, item.file) },
+                                onOpenWith = { selectedFileForOpenWith = item.file },
+                                onInstallApk = { FileOpener.installApk(context, item.file) }
+                            )
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    selectedFileForCompress?.let { file ->
+        CompressDialog(
+            file = file,
+            onDismiss = { selectedFileForCompress = null },
+            onConfirm = { zipName ->
+                selectedFileForCompress = null
+                viewModel.compressFiles(listOf(file), zipName)
+            }
+        )
     }
 
     selectedFileForOpenWith?.let { file ->

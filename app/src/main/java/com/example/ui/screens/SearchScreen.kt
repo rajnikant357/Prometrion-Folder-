@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -46,8 +48,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.FileCategory
+import com.example.ui.components.CompressDialog
+import com.example.ui.components.DeleteConfirmationDialog
 import com.example.ui.components.FileListItem
+import com.example.ui.components.FilePropertiesDialog
+import com.example.ui.components.MoveToVaultDialog
 import com.example.ui.components.OpenWithDialog
+import com.example.ui.components.RenameDialog
 import com.example.ui.viewmodel.FileManagerViewModel
 import com.example.util.FileOpener
 import com.example.util.FileShareUtils
@@ -66,7 +73,15 @@ fun SearchScreen(
     val categoryFilter by viewModel.searchCategoryFilter.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
+
     var selectedFileForOpenWith by remember { mutableStateOf<File?>(null) }
+    var selectedFileForRename by remember { mutableStateOf<File?>(null) }
+    var selectedFileForDelete by remember { mutableStateOf<File?>(null) }
+    var selectedFileForProperties by remember { mutableStateOf<File?>(null) }
+    var selectedFileForCompress by remember { mutableStateOf<File?>(null) }
+    var selectedFileForVault by remember { mutableStateOf<File?>(null) }
+
+    BackHandler { onNavigateBack() }
 
     val filterCategories = remember {
         listOf(
@@ -164,20 +179,45 @@ fun SearchScreen(
                     )
                 }
             } else if (query.isBlank() && categoryFilter == null) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Search across all local folders",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Search across all local folders",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Try advanced syntax queries:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val suggestions = listOf("type:pdf", "type:image", "type:video", "type:doc", "size:>100MB", "size:<10MB", "modified:today")
+                        suggestions.forEach { sugg ->
+                            AssistChip(
+                                onClick = { viewModel.onSearchQueryChanged(sugg) },
+                                label = { Text(sugg) }
+                            )
+                        }
                     }
                 }
             } else if (searchResults.isEmpty()) {
@@ -216,14 +256,14 @@ fun SearchScreen(
                                 viewModel.recordFileAccess(item.file)
                                 onOpenFile(item.file)
                             },
-                            onMoveToVault = { viewModel.moveFileToVault(item.file) },
-                            onRename = {},
-                            onDelete = { viewModel.deleteFile(item.file) },
+                            onMoveToVault = { selectedFileForVault = item.file },
+                            onRename = { selectedFileForRename = item.file },
+                            onDelete = { selectedFileForDelete = item.file },
                             onCopy = { viewModel.setClipboard(item.file, isCut = false) },
                             onCut = { viewModel.setClipboard(item.file, isCut = true) },
-                            onCompress = { viewModel.compressFiles(listOf(item.file), item.file.nameWithoutExtension) },
+                            onCompress = { selectedFileForCompress = item.file },
                             onExtract = { viewModel.extractArchive(item.file) },
-                            onProperties = {},
+                            onProperties = { selectedFileForProperties = item.file },
                             onShare = { FileShareUtils.shareFile(context, item.file) },
                             onOpenWith = { selectedFileForOpenWith = item.file },
                             onInstallApk = { FileOpener.installApk(context, item.file) }
@@ -238,6 +278,58 @@ fun SearchScreen(
         OpenWithDialog(
             file = file,
             onDismiss = { selectedFileForOpenWith = null }
+        )
+    }
+
+    selectedFileForRename?.let { file ->
+        RenameDialog(
+            file = file,
+            onDismiss = { selectedFileForRename = null },
+            onConfirm = { newName ->
+                selectedFileForRename = null
+                viewModel.renameFile(file, newName)
+            }
+        )
+    }
+
+    selectedFileForDelete?.let { file ->
+        DeleteConfirmationDialog(
+            file = file,
+            onDismiss = { selectedFileForDelete = null },
+            onConfirm = {
+                selectedFileForDelete = null
+                viewModel.moveFileToTrash(file)
+            }
+        )
+    }
+
+    selectedFileForCompress?.let { file ->
+        CompressDialog(
+            file = file,
+            onDismiss = { selectedFileForCompress = null },
+            onConfirm = { zipName ->
+                selectedFileForCompress = null
+                viewModel.compressFiles(listOf(file), zipName)
+            }
+        )
+    }
+
+    selectedFileForVault?.let { file ->
+        MoveToVaultDialog(
+            file = file,
+            onDismiss = { selectedFileForVault = null },
+            onConfirm = { deleteOriginal ->
+                selectedFileForVault = null
+                viewModel.moveFileToVault(file, deleteOriginal)
+            }
+        )
+    }
+
+    selectedFileForProperties?.let { file ->
+        FilePropertiesDialog(
+            file = file,
+            repository = viewModel.repository,
+            onDismiss = { selectedFileForProperties = null }
         )
     }
 }

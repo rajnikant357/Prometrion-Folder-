@@ -9,6 +9,14 @@ import android.media.MediaPlayer
 import android.os.ParcelFileDescriptor
 import android.widget.MediaController
 import android.widget.VideoView
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import android.media.MediaMetadataRetriever
+import java.io.BufferedReader
+import java.io.FileInputStream
+import java.io.InputStreamReader
+import java.nio.charset.CodingErrorAction
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -122,6 +130,8 @@ fun FilePreviewScreen(
     val fileType = remember(file) { FileItem.determineFileType(file) }
     var showOpenWithDialog by remember { mutableStateOf(false) }
 
+    BackHandler { onNavigateBack() }
+
     if (showOpenWithDialog) {
         OpenWithDialog(
             file = file,
@@ -234,15 +244,46 @@ private fun ImagePreview(file: File) {
 private fun TextPreview(file: File) {
     val clipboard = LocalClipboardManager.current
     var lines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var totalLinesCount by remember { mutableIntStateOf(0) }
+    var isTruncated by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(file) {
-        try {
-            lines = file.readLines()
-        } catch (e: Exception) {
-            lines = listOf("Unable to read file: ${e.message}")
+        withContext(Dispatchers.IO) {
+            try {
+                val maxPreviewLines = 2500
+                val readList = mutableListOf<String>()
+                var count = 0
+                val decoder = Charsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPLACE)
+                    .onUnmappableCharacter(CodingErrorAction.REPLACE)
+
+                FileInputStream(file).use { fis ->
+                    BufferedReader(InputStreamReader(fis, decoder)).use { reader ->
+                        var line = reader.readLine()
+                        while (line != null) {
+                            count++
+                            if (readList.size < maxPreviewLines) {
+                                readList.add(line)
+                            } else {
+                                isTruncated = true
+                            }
+                            if (count >= 50000) {
+                                isTruncated = true
+                                break
+                            }
+                            line = reader.readLine()
+                        }
+                    }
+                }
+                lines = readList
+                totalLinesCount = count
+            } catch (e: Exception) {
+                lines = listOf("Unable to read file contents: ${e.message ?: "Unknown error"}")
+            } finally {
+                isLoading = false
+            }
         }
-        isLoading = false
     }
 
     if (isLoading) {
@@ -267,7 +308,7 @@ private fun TextPreview(file: File) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "${lines.size} lines • UTF-8",
+                        text = if (isTruncated) "Showing first ${lines.size} of $totalLinesCount lines • UTF-8" else "${lines.size} lines • UTF-8",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -326,6 +367,22 @@ private fun AudioPreview(file: File) {
     var duration by remember { mutableIntStateOf(0) }
     var currentPosition by remember { mutableIntStateOf(0) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var artist by remember { mutableStateOf<String?>(null) }
+    var album by remember { mutableStateOf<String?>(null) }
+    var title by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(file) {
+        withContext(Dispatchers.IO) {
+            try {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(file.absolutePath)
+                artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                retriever.release()
+            } catch (ignored: Exception) {}
+        }
+    }
 
     DisposableEffect(file) {
         val player = MediaPlayer().apply {
@@ -380,11 +437,20 @@ private fun AudioPreview(file: File) {
         Spacer(modifier = Modifier.height(20.dp))
 
         Text(
-            text = file.name,
+            text = title ?: file.name,
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+
+        if (artist != null || album != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = listOfNotNull(artist, album).joinToString(" • "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
 
         Spacer(modifier = Modifier.height(4.dp))
 
@@ -427,26 +493,57 @@ private fun AudioPreview(file: File) {
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        Button(
-            onClick = {
-                mediaPlayer?.let {
-                    if (it.isPlaying) {
-                        it.pause()
-                        isPlaying = false
-                    } else {
-                        it.start()
-                        isPlaying = true
-                    }
-                }
-            },
-            modifier = Modifier.size(56.dp),
-            shape = CircleShape
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause" else "Play",
-                tint = MaterialTheme.colorScheme.onPrimary
-            )
+            IconButton(
+                onClick = {
+                    mediaPlayer?.let {
+                        val newPos = (it.currentPosition - 10000).coerceAtLeast(0)
+                        it.seekTo(newPos)
+                        currentPosition = newPos
+                    }
+                },
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(Icons.Default.FastRewind, contentDescription = "Rewind 10 seconds", modifier = Modifier.size(28.dp))
+            }
+
+            Button(
+                onClick = {
+                    mediaPlayer?.let {
+                        if (it.isPlaying) {
+                            it.pause()
+                            isPlaying = false
+                        } else {
+                            it.start()
+                            isPlaying = true
+                        }
+                    }
+                },
+                modifier = Modifier.size(56.dp),
+                shape = CircleShape
+            ) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    mediaPlayer?.let {
+                        val newPos = (it.currentPosition + 10000).coerceAtMost(duration)
+                        it.seekTo(newPos)
+                        currentPosition = newPos
+                    }
+                },
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(Icons.Default.FastForward, contentDescription = "Forward 10 seconds", modifier = Modifier.size(28.dp))
+            }
         }
     }
 }
@@ -1088,6 +1185,34 @@ private fun GenericDocumentPreview(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
+
+        val isOffice = file.extension.lowercase() in setOf("doc", "docx", "xls", "xlsx", "ppt", "pptx")
+        if (isOffice) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Preview unavailable",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Open with another application to view or edit this Office file.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
 
         Card(
             modifier = Modifier.fillMaxWidth(),

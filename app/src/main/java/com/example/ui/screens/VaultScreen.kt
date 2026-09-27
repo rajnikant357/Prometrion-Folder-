@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.VaultEntity
 import com.example.data.model.FileItem
 import com.example.ui.viewmodel.FileManagerViewModel
+import androidx.activity.compose.BackHandler
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,6 +88,8 @@ fun VaultScreen(
 
     var selectedItemForExport by remember { mutableStateOf<VaultEntity?>(null) }
     var selectedItemForDelete by remember { mutableStateOf<VaultEntity?>(null) }
+
+    BackHandler { onNavigateBack() }
 
     Scaffold(
         topBar = {

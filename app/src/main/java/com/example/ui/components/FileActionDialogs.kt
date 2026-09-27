@@ -47,6 +47,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.media.MediaMetadataRetriever
+import com.example.util.FileOpener
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.data.model.FileItem
 import com.example.data.repository.FileManagerRepository
 import java.io.File
@@ -318,13 +322,74 @@ fun FilePropertiesDialog(
     var checksum by remember { mutableStateOf<String?>(null) }
     var isCalculatingChecksum by remember { mutableStateOf(false) }
 
+    var folderSize by remember { mutableStateOf<Long?>(null) }
+    var folderFileCount by remember { mutableStateOf<Int?>(null) }
+    var folderDirCount by remember { mutableStateOf<Int?>(null) }
+    var isCalculatingFolderSize by remember { mutableStateOf(file.isDirectory) }
+
+    var mediaInfo by remember { mutableStateOf<String?>(null) }
+
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
+    val formatInfo = remember(file) { FileOpener.identifyFormat(file) }
 
     LaunchedEffect(file) {
-        if (file.isFile && file.length() < 100 * 1024 * 1024L) {
-            isCalculatingChecksum = true
-            checksum = repository.calculateChecksum(file, "SHA-256")
-            isCalculatingChecksum = false
+        if (file.isDirectory) {
+            isCalculatingFolderSize = true
+            withContext(Dispatchers.IO) {
+                var size = 0L
+                var files = 0
+                var dirs = 0
+                val stack = ArrayDeque<File>()
+                stack.add(file)
+                while (stack.isNotEmpty()) {
+                    val curr = stack.removeLast()
+                    val children = curr.listFiles() ?: continue
+                    for (c in children) {
+                        if (c.isDirectory) {
+                            dirs++
+                            stack.add(c)
+                        } else {
+                            files++
+                            size += c.length()
+                        }
+                    }
+                }
+                folderSize = size
+                folderFileCount = files
+                folderDirCount = dirs
+                isCalculatingFolderSize = false
+            }
+        } else {
+            // Checksum for files < 150MB
+            if (file.length() < 150 * 1024 * 1024L) {
+                isCalculatingChecksum = true
+                checksum = repository.calculateChecksum(file, "SHA-256")
+                isCalculatingChecksum = false
+            }
+            // Media metadata extraction
+            withContext(Dispatchers.IO) {
+                val ext = file.extension.lowercase()
+                if (ext in setOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "mp3", "m4a", "wav", "flac", "ogg")) {
+                    try {
+                        val retriever = MediaMetadataRetriever()
+                        retriever.setDataSource(file.absolutePath)
+                        val durMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                        val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                        val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                        retriever.release()
+                        val parts = mutableListOf<String>()
+                        if (width != null && height != null) parts.add("${width}x${height}")
+                        if (durMs != null) {
+                            val sec = (durMs / 1000) % 60
+                            val min = (durMs / (1000 * 60))
+                            parts.add(String.format(Locale.getDefault(), "%02d:%02d", min, sec))
+                        }
+                        if (parts.isNotEmpty()) {
+                            mediaInfo = parts.joinToString(" • ")
+                        }
+                    } catch (ignored: Exception) {}
+                }
+            }
         }
     }
 
@@ -350,7 +415,26 @@ fun FilePropertiesDialog(
             ) {
                 PropertyRow("Name", file.name)
                 PropertyRow("Type", if (file.isDirectory) "Folder" else FileItem.determineFileType(file).name)
-                PropertyRow("Size", if (file.isDirectory) "Folder" else FileItem.formatFileSize(file.length()))
+                PropertyRow("Format Description", formatInfo.description)
+                PropertyRow("MIME Type", formatInfo.mimeType)
+                PropertyRow("Extension", if (file.extension.isNotEmpty()) ".${file.extension}" else if (file.isDirectory) "Directory" else "None")
+                PropertyRow("Hidden", if (file.name.startsWith(".")) "Yes (Hidden file)" else "No")
+
+                if (file.isDirectory) {
+                    val sizeText = when {
+                        isCalculatingFolderSize -> "Calculating..."
+                        folderSize != null -> "${FileItem.formatFileSize(folderSize!!)} (${folderFileCount ?: 0} files, ${folderDirCount ?: 0} subfolders)"
+                        else -> "0 B"
+                    }
+                    PropertyRow("Size & Contents", sizeText)
+                } else {
+                    PropertyRow("Size", FileItem.formatFileSize(file.length()))
+                }
+
+                if (mediaInfo != null) {
+                    PropertyRow("Media Info", mediaInfo!!)
+                }
+
                 PropertyRow("Path", file.absolutePath)
                 PropertyRow("Modified", dateFormat.format(Date(file.lastModified())))
                 PropertyRow("Permissions", buildString {
@@ -371,7 +455,7 @@ fun FilePropertiesDialog(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Calculating...", style = MaterialTheme.typography.bodySmall)
+                                Text("Calculating hash asynchronously...", style = MaterialTheme.typography.bodySmall)
                             }
                         } else if (checksum != null) {
                             Surface(

@@ -20,8 +20,9 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("VaultFiles", appName)
+    assertEquals("Folder", appName)
   }
+
 
   @Test
   fun `test zero knowledge crypto manager`() {

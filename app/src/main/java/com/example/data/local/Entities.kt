@@ -38,3 +38,16 @@ data class RecentEntity(
     val fileType: String,
     val accessedAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "trash_items")
+data class TrashEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val trashFileName: String,
+    val originalFileName: String,
+    val originalPath: String,
+    val size: Long,
+    val isDirectory: Boolean,
+    val deletedAt: Long = System.currentTimeMillis()
+)
+

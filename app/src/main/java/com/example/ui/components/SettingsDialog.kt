@@ -31,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,9 +52,10 @@ fun SettingsDialog(
     onDismiss: () -> Unit,
     onNavigateToAbout: () -> Unit
 ) {
-    var showHiddenFiles by remember { mutableStateOf(false) }
+    val showHiddenFiles by viewModel.showHiddenFiles.collectAsState()
 
     AlertDialog(
+
         onDismissRequest = onDismiss,
         title = {
             Text(
@@ -144,9 +146,10 @@ fun SettingsDialog(
                     }
                     Switch(
                         checked = showHiddenFiles,
-                        onCheckedChange = { showHiddenFiles = it },
+                        onCheckedChange = { viewModel.toggleShowHiddenFiles() },
                         modifier = Modifier.testTag("settings_hidden_files_switch")
                     )
+
                 }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))

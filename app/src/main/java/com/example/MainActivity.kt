@@ -26,11 +26,13 @@ import com.example.data.model.FileCategory
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.CategoryScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.DuplicatesScreen
 import com.example.ui.screens.FileBrowserScreen
 import com.example.ui.screens.FilePreviewScreen
 import com.example.ui.screens.PermissionsScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.StorageAnalyzerScreen
+import com.example.ui.screens.TrashScreen
 import com.example.ui.screens.VaultScreen
 import com.example.ui.theme.VaultFilesTheme
 import com.example.ui.viewmodel.AppThemeMode
@@ -47,8 +49,11 @@ enum class Screen {
     VAULT,
     PREVIEW,
     ANALYZER,
+    TRASH,
+    DUPLICATES,
     ABOUT
 }
+
 
 class MainActivity : ComponentActivity() {
 
@@ -130,6 +135,8 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                         onNavigateToSearch = { currentScreen = Screen.SEARCH },
                         onNavigateToVault = { currentScreen = Screen.VAULT },
                         onNavigateToAnalyzer = { currentScreen = Screen.ANALYZER },
+                        onNavigateToTrash = { currentScreen = Screen.TRASH },
+                        onNavigateToDuplicates = { currentScreen = Screen.DUPLICATES },
                         onNavigateToAbout = { currentScreen = Screen.ABOUT },
                         onOpenFile = { file ->
                             returnScreenForPreview = Screen.DASHBOARD
@@ -139,9 +146,13 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                     )
                 }
 
+
                 Screen.FILE_BROWSER -> {
+                    val isSelectionMode by viewModel.isSelectionMode.collectAsState()
                     BackHandler {
-                        if (!viewModel.navigateToParent()) {
+                        if (isSelectionMode) {
+                            viewModel.clearSelection()
+                        } else if (!viewModel.navigateToParent()) {
                             currentScreen = Screen.DASHBOARD
                         }
                     }
@@ -233,7 +244,29 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                     )
                 }
 
+                Screen.TRASH -> {
+                    BackHandler { currentScreen = Screen.DASHBOARD }
+                    TrashScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { currentScreen = Screen.DASHBOARD }
+                    )
+                }
+
+                Screen.DUPLICATES -> {
+                    BackHandler { currentScreen = Screen.DASHBOARD }
+                    DuplicatesScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { currentScreen = Screen.DASHBOARD },
+                        onOpenFile = { file ->
+                            returnScreenForPreview = Screen.DUPLICATES
+                            previewFile = file
+                            currentScreen = Screen.PREVIEW
+                        }
+                    )
+                }
+
                 Screen.PERMISSIONS -> {
+
                     PermissionsScreen(
                         onPermissionGranted = {
                             viewModel.updatePermissionStatus(true)

@@ -6,7 +6,9 @@ import android.os.StatFs
 import com.example.data.local.AppDatabase
 import com.example.data.local.FavoriteEntity
 import com.example.data.local.RecentEntity
+import com.example.data.local.TrashEntity
 import com.example.data.local.VaultEntity
+import com.example.data.model.DuplicateGroup
 import com.example.data.model.FileCategory
 import com.example.data.model.FileItem
 import com.example.data.model.FileType
@@ -36,10 +38,12 @@ class FileManagerRepository(
     private val vaultDao = database.vaultDao()
     private val favoriteDao = database.favoriteDao()
     private val recentDao = database.recentDao()
+    private val trashDao = database.trashDao()
 
     val vaultItems: Flow<List<VaultEntity>> = vaultDao.getAllVaultItems()
     val favoriteItems: Flow<List<FavoriteEntity>> = favoriteDao.getAllFavorites()
     val recentItems: Flow<List<RecentEntity>> = recentDao.getRecentFiles()
+    val trashItems: Flow<List<TrashEntity>> = trashDao.getAllTrash()
 
     fun getInternalStorageRoot(): File {
         return Environment.getExternalStorageDirectory()
@@ -124,13 +128,16 @@ class FileManagerRepository(
 
     suspend fun getDirectoryContents(
         directory: File,
-        sortOption: SortOption = SortOption()
+        sortOption: SortOption = SortOption(),
+        showHidden: Boolean = false
     ): List<FileItem> = withContext(Dispatchers.IO) {
         if (!directory.exists() || !directory.isDirectory) return@withContext emptyList()
 
         val files = directory.listFiles() ?: return@withContext emptyList()
-        val items = files.map { file ->
-            val itemCount = if (file.isDirectory) (file.listFiles()?.size ?: 0) else 0
+        val filteredFiles: List<File> = if (showHidden) files.toList() else files.filter { !it.name.startsWith(".") }
+        val items = filteredFiles.map { file ->
+
+            val itemCount = if (file.isDirectory) (file.listFiles()?.count { showHidden || !it.name.startsWith(".") } ?: 0) else 0
             FileItem(
                 file = file,
                 itemCount = itemCount
@@ -139,6 +146,7 @@ class FileManagerRepository(
 
         sortFileList(items, sortOption)
     }
+
 
     private fun sortFileList(items: List<FileItem>, sortOption: SortOption): List<FileItem> {
         val comparator = when (sortOption.sortBy) {
@@ -265,26 +273,84 @@ class FileManagerRepository(
         query: String,
         categoryFilter: FileCategory? = null,
         minSizeBytes: Long? = null,
-        maxSizeBytes: Long? = null
+        maxSizeBytes: Long? = null,
+        showHidden: Boolean = false
     ): List<FileItem> = withContext(Dispatchers.IO) {
         val root = getInternalStorageRoot()
         val matching = mutableListOf<FileItem>()
-        val qLower = query.lowercase().trim()
+        var cleanQuery = query.trim()
+
+        // Parse query syntax: type:pdf, size:>10MB, etc.
+        var parsedCategory = categoryFilter
+        var parsedMinSize = minSizeBytes
+        var parsedMaxSize = maxSizeBytes
+        var dateFilter: String? = null
+
+        val tokens = cleanQuery.split("\\s+".toRegex())
+        val nameWords = mutableListOf<String>()
+
+        for (token in tokens) {
+            val lowerToken = token.lowercase()
+            when {
+                lowerToken.startsWith("type:") -> {
+                    val typeStr = lowerToken.substringAfter("type:")
+                    parsedCategory = when (typeStr) {
+                        "image", "images", "photo", "photos" -> FileCategory.IMAGES
+                        "video", "videos", "movie" -> FileCategory.VIDEOS
+                        "audio", "music", "song" -> FileCategory.AUDIO
+                        "doc", "docs", "document", "documents", "pdf" -> FileCategory.DOCUMENTS
+                        "apk", "apks", "app" -> FileCategory.APKS
+                        "archive", "zip", "rar" -> FileCategory.ARCHIVES
+                        else -> parsedCategory
+                    }
+                }
+                lowerToken.startsWith("size:>") -> {
+                    val sizeStr = lowerToken.substringAfter("size:>")
+                    parsedMinSize = parseSizeStrToBytes(sizeStr)
+                }
+                lowerToken.startsWith("size:<") -> {
+                    val sizeStr = lowerToken.substringAfter("size:<")
+                    parsedMaxSize = parseSizeStrToBytes(sizeStr)
+                }
+                lowerToken.startsWith("name:") -> {
+                    nameWords.add(lowerToken.substringAfter("name:"))
+                }
+                lowerToken.startsWith("modified:") -> {
+                    dateFilter = lowerToken.substringAfter("modified:")
+                }
+                else -> {
+                    if (token.isNotEmpty()) nameWords.add(lowerToken)
+                }
+            }
+        }
+
+        val searchName = nameWords.joinToString(" ")
+        val now = System.currentTimeMillis()
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val sevenDaysMs = 7 * oneDayMs
 
         fun searchRecursive(dir: File, depth: Int = 0) {
             if (!dir.exists() || depth > 5) return
             val files = dir.listFiles() ?: return
             for (f in files) {
-                if (f.name.startsWith(".")) continue
+                if (!showHidden && f.name.startsWith(".")) continue
                 if (depth == 1 && f.name.equals("Android", ignoreCase = true)) continue
+                if (f.name == "encrypted_vault" || f.name == "trash_bin" || f.name.startsWith("enc_")) continue
 
-                val matchesName = qLower.isEmpty() || f.name.lowercase().contains(qLower)
-                val matchesSize = (minSizeBytes == null || f.length() >= minSizeBytes) &&
-                        (maxSizeBytes == null || f.length() <= maxSizeBytes)
+                val matchesName = searchName.isEmpty() || f.name.lowercase().contains(searchName)
+                val matchesSize = (parsedMinSize == null || f.length() >= parsedMinSize) &&
+                        (parsedMaxSize == null || f.length() <= parsedMaxSize)
 
-                if (matchesName && matchesSize) {
+                val matchesDate = when (dateFilter) {
+                    "today" -> (now - f.lastModified()) < oneDayMs
+                    "yesterday" -> (now - f.lastModified()) in oneDayMs..(2 * oneDayMs)
+                    "this_week" -> (now - f.lastModified()) < sevenDaysMs
+                    else -> true
+                }
+
+                if (matchesName && matchesSize && matchesDate) {
                     val item = FileItem(f)
-                    val matchesCategory = when (categoryFilter) {
+                    val matchesCategory = when (parsedCategory) {
                         null -> true
                         FileCategory.IMAGES -> item.fileType == FileType.IMAGE
                         FileCategory.VIDEOS -> item.fileType == FileType.VIDEO
@@ -309,23 +375,62 @@ class FileManagerRepository(
         matching.sortedByDescending { it.lastModified }
     }
 
+    private fun parseSizeStrToBytes(str: String): Long {
+        return try {
+            val numStr = str.filter { it.isDigit() || it == '.' }
+            val unitStr = str.filter { it.isLetter() }.uppercase()
+            val num = numStr.toDoubleOrNull() ?: return 0L
+            when {
+                unitStr.startsWith("G") -> (num * 1024 * 1024 * 1024).toLong()
+                unitStr.startsWith("M") -> (num * 1024 * 1024).toLong()
+                unitStr.startsWith("K") -> (num * 1024).toLong()
+                else -> num.toLong()
+            }
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
     suspend fun createFolder(parent: File, folderName: String): Boolean = withContext(Dispatchers.IO) {
-        val target = File(parent, folderName)
+        val target = File(parent, folderName.trim())
         if (!target.exists()) target.mkdirs() else false
     }
 
+    suspend fun createFile(parent: File, fileName: String, templateContent: String = ""): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val target = File(parent, fileName.trim())
+            if (target.exists()) return@withContext false
+            target.parentFile?.mkdirs()
+            target.writeText(templateContent)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
     suspend fun renameFile(file: File, newName: String): Boolean = withContext(Dispatchers.IO) {
-        val target = File(file.parentFile, newName)
+        val target = File(file.parentFile, newName.trim())
         if (target.exists()) return@withContext false
-        file.renameTo(target)
+        val renamed = file.renameTo(target)
+        if (renamed) {
+            recentDao.removeRecent(file.absolutePath)
+            favoriteDao.removeFavorite(file.absolutePath)
+        }
+        renamed
     }
 
     suspend fun deleteFile(file: File): Boolean = withContext(Dispatchers.IO) {
-        if (file.isDirectory) {
+        val deleted = if (file.isDirectory) {
             file.deleteRecursively()
         } else {
             file.delete()
         }
+        if (deleted) {
+            recentDao.removeRecent(file.absolutePath)
+            favoriteDao.removeFavorite(file.absolutePath)
+        }
+        deleted
     }
 
     suspend fun copyFile(source: File, destinationDir: File): Boolean = withContext(Dispatchers.IO) {
@@ -359,6 +464,281 @@ class FileManagerRepository(
             false
         }
     }
+
+    fun calculateDirSize(dir: File): Long {
+        if (!dir.exists()) return 0L
+        if (!dir.isDirectory) return dir.length()
+        var size = 0L
+        val stack = ArrayDeque<File>()
+        stack.add(dir)
+        while (stack.isNotEmpty()) {
+            val current = stack.removeLast()
+            val files = current.listFiles() ?: continue
+            for (f in files) {
+                if (f.isDirectory) {
+                    stack.add(f)
+                } else {
+                    size += f.length()
+                }
+            }
+        }
+        return size
+    }
+
+    private fun copyWithByteTracking(source: File, destDir: File, onBytesCopied: (Long) -> Unit): Boolean {
+        return try {
+            val target = File(destDir, source.name)
+            if (source.isDirectory) {
+                if (!target.exists()) target.mkdirs()
+                val children = source.listFiles() ?: return true
+                for (child in children) {
+                    copyWithByteTracking(child, target, onBytesCopied)
+                }
+                true
+            } else {
+                FileInputStream(source).use { input ->
+                    FileOutputStream(target).use { output ->
+                        val buffer = ByteArray(65536)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            onBytesCopied(bytesRead.toLong())
+                        }
+                    }
+                }
+                true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun copyFilesBatch(
+        sources: List<File>,
+        destinationDir: File,
+        onProgress: (processedFiles: Int, totalFiles: Int, processedBytes: Long, totalBytes: Long, currentFile: String) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        var totalBytes = 0L
+        for (f in sources) {
+            totalBytes += if (f.isDirectory) calculateDirSize(f) else f.length()
+        }
+        var processedBytes = 0L
+        var processedFiles = 0
+        val totalFiles = sources.size
+
+        for (source in sources) {
+            onProgress(processedFiles, totalFiles, processedBytes, totalBytes, source.name)
+            val success = copyWithByteTracking(source, destinationDir) { bytesCopied ->
+                processedBytes += bytesCopied
+                onProgress(processedFiles, totalFiles, processedBytes, totalBytes, source.name)
+            }
+            if (!success) return@withContext false
+            processedFiles++
+            onProgress(processedFiles, totalFiles, processedBytes, totalBytes, source.name)
+        }
+        true
+    }
+
+    suspend fun moveFilesBatch(
+        sources: List<File>,
+        destinationDir: File,
+        onProgress: (processedFiles: Int, totalFiles: Int, processedBytes: Long, totalBytes: Long, currentFile: String) -> Unit
+    ): Boolean = withContext(Dispatchers.IO) {
+        var totalBytes = 0L
+        for (f in sources) {
+            totalBytes += if (f.isDirectory) calculateDirSize(f) else f.length()
+        }
+        var processedBytes = 0L
+        var processedFiles = 0
+        val totalFiles = sources.size
+
+        for (source in sources) {
+            onProgress(processedFiles, totalFiles, processedBytes, totalBytes, source.name)
+            val target = File(destinationDir, source.name)
+            if (source.renameTo(target)) {
+                val size = if (target.isDirectory) calculateDirSize(target) else target.length()
+                processedBytes += size
+            } else {
+                // Cross volume fallback
+                val copied = copyWithByteTracking(source, destinationDir) { bytesCopied ->
+                    processedBytes += bytesCopied
+                    onProgress(processedFiles, totalFiles, processedBytes, totalBytes, source.name)
+                }
+                if (copied) {
+                    deleteFile(source)
+                } else return@withContext false
+            }
+            processedFiles++
+            onProgress(processedFiles, totalFiles, processedBytes, totalBytes, source.name)
+        }
+        true
+    }
+
+    fun getTrashDir(): File {
+        val dir = File(context.filesDir, "trash_bin")
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+        return dir
+    }
+
+    suspend fun moveToTrash(file: File): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (!file.exists()) return@withContext false
+            val trashDir = getTrashDir()
+            val trashFileName = "${System.currentTimeMillis()}_${file.name}"
+            val targetFile = File(trashDir, trashFileName)
+
+            val moved = if (file.renameTo(targetFile)) {
+                true
+            } else {
+                if (file.isDirectory) {
+                    file.copyRecursively(targetFile, overwrite = true) && file.deleteRecursively()
+                } else {
+                    file.copyTo(targetFile, overwrite = true)
+                    file.delete()
+                }
+            }
+
+            if (moved) {
+                val entity = TrashEntity(
+                    trashFileName = trashFileName,
+                    originalFileName = file.name,
+                    originalPath = file.absolutePath,
+                    size = if (targetFile.isDirectory) calculateDirSize(targetFile) else targetFile.length(),
+                    isDirectory = targetFile.isDirectory,
+                    deletedAt = System.currentTimeMillis()
+                )
+                trashDao.insert(entity)
+                recentDao.removeRecent(file.absolutePath)
+                favoriteDao.removeFavorite(file.absolutePath)
+                true
+            } else false
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun restoreFromTrash(item: TrashEntity): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val trashFile = File(getTrashDir(), item.trashFileName)
+            if (!trashFile.exists()) {
+                trashDao.delete(item)
+                return@withContext false
+            }
+
+            var destFile = File(item.originalPath)
+            if (destFile.exists()) {
+                val parent = destFile.parentFile ?: getInternalStorageRoot()
+                val nameWithoutExt = destFile.nameWithoutExtension
+                val ext = if (destFile.extension.isNotEmpty()) ".${destFile.extension}" else ""
+                destFile = File(parent, "${nameWithoutExt}_restored$ext")
+            } else {
+                destFile.parentFile?.mkdirs()
+            }
+
+            val restored = if (trashFile.renameTo(destFile)) {
+                true
+            } else {
+                if (trashFile.isDirectory) {
+                    trashFile.copyRecursively(destFile, overwrite = true) && trashFile.deleteRecursively()
+                } else {
+                    trashFile.copyTo(destFile, overwrite = true)
+                    trashFile.delete()
+                }
+            }
+
+            if (restored) {
+                trashDao.delete(item)
+                true
+            } else false
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun deletePermanentlyFromTrash(item: TrashEntity): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val trashFile = File(getTrashDir(), item.trashFileName)
+            if (trashFile.exists()) {
+                if (trashFile.isDirectory) trashFile.deleteRecursively() else trashFile.delete()
+            }
+            trashDao.delete(item)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun emptyTrash(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val trashDir = getTrashDir()
+            trashDir.listFiles()?.forEach {
+                if (it.isDirectory) it.deleteRecursively() else it.delete()
+            }
+            trashDao.clearAll()
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun findDuplicateFiles(
+        minSizeBytes: Long = 1024L
+    ): List<DuplicateGroup> = withContext(Dispatchers.IO) {
+        val root = getInternalStorageRoot()
+        val sizeMap = mutableMapOf<Long, MutableList<File>>()
+
+        fun scanForSizes(dir: File, depth: Int = 0) {
+            if (!dir.exists() || depth > 5) return
+            val files = dir.listFiles() ?: return
+            for (f in files) {
+                if (f.name.startsWith(".")) continue
+                if (depth == 1 && f.name.equals("Android", ignoreCase = true)) continue
+                if (f.isFile) {
+                    val len = f.length()
+                    if (len >= minSizeBytes) {
+                        sizeMap.getOrPut(len) { mutableListOf() }.add(f)
+                    }
+                } else if (f.isDirectory) {
+                    scanForSizes(f, depth + 1)
+                }
+            }
+        }
+        scanForSizes(root)
+
+        val sizeCandidates = sizeMap.filter { it.value.size >= 2 }
+        val duplicateGroups = mutableListOf<DuplicateGroup>()
+
+        for ((size, candidateFiles) in sizeCandidates) {
+            val hashMap = mutableMapOf<String, MutableList<File>>()
+            for (file in candidateFiles) {
+                val hash = calculateChecksum(file, "SHA-256")
+                if (hash != "Checksum unavailable") {
+                    hashMap.getOrPut(hash) { mutableListOf() }.add(file)
+                }
+            }
+            for ((hash, filesWithSameHash) in hashMap) {
+                if (filesWithSameHash.size >= 2) {
+                    duplicateGroups.add(
+                        DuplicateGroup(
+                            fileSize = size,
+                            hash = hash,
+                            files = filesWithSameHash
+                        )
+                    )
+                }
+            }
+        }
+
+        duplicateGroups.sortedByDescending { it.wasteSize }
+    }
+
 
     suspend fun compressToZip(files: List<File>, zipFile: File): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -473,6 +853,8 @@ class FileManagerRepository(
         if (deleteOriginal) {
             sourceFile.delete()
         }
+        recentDao.removeRecent(sourceFile.absolutePath)
+        favoriteDao.removeFavorite(sourceFile.absolutePath)
         true
     }
 
@@ -500,12 +882,21 @@ class FileManagerRepository(
     }
 
     suspend fun toggleFavorite(file: File): Boolean = withContext(Dispatchers.IO) {
+        if (file.absolutePath.contains("encrypted_vault") ||
+            file.absolutePath.contains("trash_bin") ||
+            file.name.startsWith("enc_")) {
+            return@withContext false
+        }
         val path = file.absolutePath
-        val isFav = favoriteDao.isFavorite(path)
-        // Check current
-        val entity = FavoriteEntity(path, file.name, file.isDirectory)
-        favoriteDao.addFavorite(entity)
-        true
+        val isFav = favoriteDao.isFavoriteDirect(path)
+        if (isFav) {
+            favoriteDao.removeFavorite(path)
+            false
+        } else {
+            val entity = FavoriteEntity(path, file.name, file.isDirectory)
+            favoriteDao.addFavorite(entity)
+            true
+        }
     }
 
     suspend fun removeFavorite(path: String) = withContext(Dispatchers.IO) {
@@ -513,7 +904,12 @@ class FileManagerRepository(
     }
 
     suspend fun recordRecent(file: File) = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext
+        if (!file.exists() ||
+            file.absolutePath.contains("encrypted_vault") ||
+            file.absolutePath.contains("trash_bin") ||
+            file.name.startsWith("enc_")) {
+            return@withContext
+        }
         val entity = RecentEntity(
             path = file.absolutePath,
             name = file.name,

@@ -90,8 +90,18 @@ object FileShareUtils {
                 uris.add(uri)
             }
 
+            val mimeTypes = shareableFiles.map { getMimeType(it) }.distinct()
+            val resolvedMimeType = when {
+                mimeTypes.size == 1 -> mimeTypes.first()
+                mimeTypes.all { it.startsWith("image/") } -> "image/*"
+                mimeTypes.all { it.startsWith("video/") } -> "video/*"
+                mimeTypes.all { it.startsWith("audio/") } -> "audio/*"
+                mimeTypes.all { it == "application/pdf" } -> "application/pdf"
+                else -> "*/*"
+            }
+
             val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                type = "*/*"
+                type = resolvedMimeType
                 putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
                 putExtra(Intent.EXTRA_SUBJECT, "Sharing ${shareableFiles.size} files")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

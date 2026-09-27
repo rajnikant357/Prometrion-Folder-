@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.FileItem
 import com.example.ui.viewmodel.FileManagerViewModel
 import com.example.util.FileShareUtils
+import androidx.activity.compose.BackHandler
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,6 +74,8 @@ fun StorageAnalyzerScreen(
     LaunchedEffect(Unit) {
         viewModel.runStorageAnalyzer()
     }
+
+    BackHandler { onNavigateBack() }
 
     Scaffold(
         topBar = {

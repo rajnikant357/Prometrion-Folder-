@@ -8,9 +8,15 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
 import com.example.data.local.FavoriteEntity
 import com.example.data.local.RecentEntity
+import com.example.data.local.TrashEntity
 import com.example.data.local.VaultEntity
+import com.example.data.model.BatchClipboard
+import com.example.data.model.DuplicateGroup
 import com.example.data.model.FileCategory
 import com.example.data.model.FileItem
+import com.example.data.model.FileOperationProgress
+import com.example.data.model.FileOperationStatus
+import com.example.data.model.FileOperationType
 import com.example.data.model.SortBy
 import com.example.data.model.SortOption
 import com.example.data.model.SortOrder
@@ -136,6 +142,41 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
     val recentFiles: StateFlow<List<RecentEntity>> = repository.recentItems
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val trashItems: StateFlow<List<TrashEntity>> = repository.trashItems
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Hidden files toggle
+    private val _showHiddenFiles = MutableStateFlow(false)
+    val showHiddenFiles: StateFlow<Boolean> = _showHiddenFiles.asStateFlow()
+
+    // Multi-Selection Mode
+    private val _isSelectionMode = MutableStateFlow(false)
+    val isSelectionMode: StateFlow<Boolean> = _isSelectionMode.asStateFlow()
+
+    private val _selectedFiles = MutableStateFlow<Set<File>>(emptySet())
+    val selectedFiles: StateFlow<Set<File>> = _selectedFiles.asStateFlow()
+
+    // Batch Clipboard (Copy / Move)
+    private val _batchClipboard = MutableStateFlow<BatchClipboard?>(null)
+    val batchClipboard: StateFlow<BatchClipboard?> = _batchClipboard.asStateFlow()
+
+    // Active File Operation Progress
+    private val _currentOperation = MutableStateFlow<FileOperationProgress?>(null)
+    val currentOperation: StateFlow<FileOperationProgress?> = _currentOperation.asStateFlow()
+
+    // Navigation History (Back & Forward Stacks)
+    private val _backStack = mutableListOf<File>()
+    private val _forwardStack = mutableListOf<File>()
+    private val _canGoForward = MutableStateFlow(false)
+    val canGoForward: StateFlow<Boolean> = _canGoForward.asStateFlow()
+
+    // Duplicate File Groups
+    private val _duplicateGroups = MutableStateFlow<List<DuplicateGroup>>(emptyList())
+    val duplicateGroups: StateFlow<List<DuplicateGroup>> = _duplicateGroups.asStateFlow()
+
+    private val _isScanningDuplicates = MutableStateFlow(false)
+    val isScanningDuplicates: StateFlow<Boolean> = _isScanningDuplicates.asStateFlow()
+
     // Storage Analyzer
     private val _analyzerState = MutableStateFlow(StorageAnalyzerState())
     val analyzerState: StateFlow<StorageAnalyzerState> = _analyzerState.asStateFlow()
@@ -144,9 +185,10 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
     private val _snackbarMessage = MutableSharedFlow<String>()
     val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
 
-    // Clipboard for Copy / Cut
+    // Clipboard for Copy / Cut (legacy single)
     private val _clipboardFile = MutableStateFlow<Pair<File, Boolean>?>(null) // File, isCut
     val clipboardFile: StateFlow<Pair<File, Boolean>?> = _clipboardFile.asStateFlow()
+
 
     init {
         refreshStorageVolumes()
@@ -194,27 +236,64 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun navigateToDirectory(directory: File) {
+    fun navigateToDirectory(directory: File, addToHistory: Boolean = true) {
+        if (directory.absolutePath == _currentDirectory.value.absolutePath) return
+        if (addToHistory) {
+            _backStack.add(_currentDirectory.value)
+            _forwardStack.clear()
+            _canGoForward.value = false
+        }
         _currentDirectory.value = directory
+        clearSelection()
         refreshDirectory()
     }
 
     fun navigateToParent(): Boolean {
+        if (_isSelectionMode.value) {
+            clearSelection()
+            return true
+        }
         val current = _currentDirectory.value
         val parent = current.parentFile
         val root = repository.getInternalStorageRoot().parentFile
         if (parent != null && parent.exists() && parent != root?.parentFile) {
+            _forwardStack.add(current)
+            _canGoForward.value = true
             _currentDirectory.value = parent
+            clearSelection()
             refreshDirectory()
             return true
         }
         return false
     }
 
+    fun navigateForward(): Boolean {
+        if (_forwardStack.isNotEmpty()) {
+            val next = _forwardStack.removeLast()
+            _canGoForward.value = _forwardStack.isNotEmpty()
+            _backStack.add(_currentDirectory.value)
+            _currentDirectory.value = next
+            clearSelection()
+            refreshDirectory()
+            return true
+        }
+        return false
+    }
+
+    fun toggleShowHiddenFiles() {
+        _showHiddenFiles.value = !_showHiddenFiles.value
+        emitMessage(if (_showHiddenFiles.value) "Showing hidden files" else "Hidden files hidden")
+        refreshDirectory()
+    }
+
     fun refreshDirectory() {
         viewModelScope.launch {
             _isLoadingDirectory.value = true
-            val items = repository.getDirectoryContents(_currentDirectory.value, _sortOption.value)
+            val items = repository.getDirectoryContents(
+                _currentDirectory.value,
+                _sortOption.value,
+                showHidden = _showHiddenFiles.value
+            )
             _directoryItems.value = items
             _isLoadingDirectory.value = false
         }
@@ -234,6 +313,7 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
     fun toggleGridView() {
         _isGridView.value = !_isGridView.value
     }
+
 
     fun selectCategory(category: FileCategory?) {
         _selectedCategory.value = category
@@ -268,10 +348,15 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
         }
         viewModelScope.launch {
             _isSearching.value = true
-            val results = repository.searchFiles(query, category)
+            val results = repository.searchFiles(
+                query = query,
+                categoryFilter = category,
+                showHidden = _showHiddenFiles.value
+            )
             _searchResults.value = results
             _isSearching.value = false
         }
+
     }
 
     // Vault Operations
@@ -363,17 +448,289 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // Standard File Operations
-    fun createNewFolder(name: String) {
+    // Standard & Batch File Operations
+    fun toggleFileSelection(file: File) {
+        val current = _selectedFiles.value.toMutableSet()
+        if (current.contains(file)) {
+            current.remove(file)
+            if (current.isEmpty()) {
+                _isSelectionMode.value = false
+            }
+        } else {
+            current.add(file)
+            _isSelectionMode.value = true
+        }
+        _selectedFiles.value = current
+    }
+
+    fun selectAll() {
+        val files = _directoryItems.value.map { it.file }.toSet()
+        _selectedFiles.value = files
+        _isSelectionMode.value = files.isNotEmpty()
+    }
+
+    fun deselectAll() {
+        _selectedFiles.value = emptySet()
+        _isSelectionMode.value = false
+    }
+
+    fun clearSelection() {
+        _selectedFiles.value = emptySet()
+        _isSelectionMode.value = false
+    }
+
+    fun copySelectedFiles() {
+        val files = _selectedFiles.value.toList()
+        if (files.isEmpty()) return
+        _batchClipboard.value = BatchClipboard(files, isCut = false)
+        clearSelection()
+        emitMessage("Copied ${files.size} items to clipboard")
+    }
+
+    fun cutSelectedFiles() {
+        val files = _selectedFiles.value.toList()
+        if (files.isEmpty()) return
+        _batchClipboard.value = BatchClipboard(files, isCut = true)
+        clearSelection()
+        emitMessage("Cut ${files.size} items to clipboard")
+    }
+
+    fun clearBatchClipboard() {
+        _batchClipboard.value = null
+    }
+
+    fun pasteBatchClipboard(targetDir: File = _currentDirectory.value) {
+        val clip = _batchClipboard.value ?: return
+        val isCut = clip.isCut
+        val sources = clip.files
+        val totalFiles = sources.size
+        val operationId = System.currentTimeMillis().toString()
+
         viewModelScope.launch {
-            val success = repository.createFolder(_currentDirectory.value, name)
-            if (success) {
-                emitMessage("Folder created: $name")
-                refreshDirectory()
+            val startTime = System.currentTimeMillis()
+            var lastTime = startTime
+            var lastBytes = 0L
+
+            _currentOperation.value = FileOperationProgress(
+                operationId = operationId,
+                title = if (isCut) "Moving $totalFiles files..." else "Copying $totalFiles files...",
+                type = if (isCut) FileOperationType.MOVE else FileOperationType.COPY,
+                totalFiles = totalFiles,
+                processedFiles = 0,
+                totalBytes = clip.totalSize,
+                processedBytes = 0L,
+                status = FileOperationStatus.RUNNING
+            )
+
+            val success = if (isCut) {
+                repository.moveFilesBatch(sources, targetDir) { pFiles, tFiles, pBytes, tBytes, currentName ->
+                    val now = System.currentTimeMillis()
+                    val timeDeltaSec = (now - lastTime) / 1000.0
+                    val speed = if (timeDeltaSec > 0.5) {
+                        val bytesDelta = pBytes - lastBytes
+                        lastTime = now
+                        lastBytes = pBytes
+                        (bytesDelta / timeDeltaSec).toLong()
+                    } else _currentOperation.value?.speedBytesPerSec ?: 0L
+
+                    val remainingBytes = (tBytes - pBytes).coerceAtLeast(0L)
+                    val eta = if (speed > 0) remainingBytes / speed else -1L
+
+                    _currentOperation.value = FileOperationProgress(
+                        operationId = operationId,
+                        title = "Moving $tFiles files to ${targetDir.name}...",
+                        type = FileOperationType.MOVE,
+                        totalFiles = tFiles,
+                        processedFiles = pFiles,
+                        totalBytes = tBytes,
+                        processedBytes = pBytes,
+                        speedBytesPerSec = speed,
+                        estimatedRemainingSeconds = eta,
+                        currentFileName = currentName,
+                        status = FileOperationStatus.RUNNING
+                    )
+                }
             } else {
-                emitMessage("Failed to create folder")
+                repository.copyFilesBatch(sources, targetDir) { pFiles, tFiles, pBytes, tBytes, currentName ->
+                    val now = System.currentTimeMillis()
+                    val timeDeltaSec = (now - lastTime) / 1000.0
+                    val speed = if (timeDeltaSec > 0.5) {
+                        val bytesDelta = pBytes - lastBytes
+                        lastTime = now
+                        lastBytes = pBytes
+                        (bytesDelta / timeDeltaSec).toLong()
+                    } else _currentOperation.value?.speedBytesPerSec ?: 0L
+
+                    val remainingBytes = (tBytes - pBytes).coerceAtLeast(0L)
+                    val eta = if (speed > 0) remainingBytes / speed else -1L
+
+                    _currentOperation.value = FileOperationProgress(
+                        operationId = operationId,
+                        title = "Copying $tFiles files to ${targetDir.name}...",
+                        type = FileOperationType.COPY,
+                        totalFiles = tFiles,
+                        processedFiles = pFiles,
+                        totalBytes = tBytes,
+                        processedBytes = pBytes,
+                        speedBytesPerSec = speed,
+                        estimatedRemainingSeconds = eta,
+                        currentFileName = currentName,
+                        status = FileOperationStatus.RUNNING
+                    )
+                }
+            }
+
+            if (success) {
+                _currentOperation.value = _currentOperation.value?.copy(
+                    status = FileOperationStatus.COMPLETED,
+                    processedFiles = totalFiles,
+                    processedBytes = clip.totalSize
+                )
+                emitMessage(if (isCut) "Moved $totalFiles files to ${targetDir.name}" else "Copied $totalFiles files to ${targetDir.name}")
+                if (isCut) {
+                    _batchClipboard.value = null
+                }
+            } else {
+                _currentOperation.value = _currentOperation.value?.copy(
+                    status = FileOperationStatus.FAILED,
+                    errorMessage = "Error during transfer"
+                )
+                emitMessage("Failed to transfer files")
+            }
+
+            kotlinx.coroutines.delay(1000)
+            _currentOperation.value = null
+            refreshDirectory()
+            refreshStorageVolumes()
+        }
+    }
+
+    fun dismissCurrentOperation() {
+        _currentOperation.value = null
+    }
+
+    // Trash Operations
+    fun moveSelectedToTrash() {
+        val files = _selectedFiles.value.toList()
+        if (files.isEmpty()) return
+        viewModelScope.launch {
+            var moved = 0
+            for (f in files) {
+                if (repository.moveToTrash(f)) moved++
+            }
+            clearSelection()
+            emitMessage("Moved $moved items to Trash")
+            refreshDirectory()
+            refreshStorageVolumes()
+        }
+    }
+
+    fun moveFileToTrash(file: File) {
+        viewModelScope.launch {
+            val success = repository.moveToTrash(file)
+            if (success) {
+                emitMessage("Moved to Trash: ${file.name}")
+                refreshDirectory()
+                refreshStorageVolumes()
+            } else {
+                emitMessage("Failed to move to Trash")
             }
         }
+    }
+
+    fun restoreTrashItem(item: TrashEntity) {
+        viewModelScope.launch {
+            val success = repository.restoreFromTrash(item)
+            if (success) {
+                emitMessage("Restored: ${item.originalFileName}")
+                refreshDirectory()
+                refreshStorageVolumes()
+            } else {
+                emitMessage("Failed to restore item")
+            }
+        }
+    }
+
+    fun deleteTrashItemPermanently(item: TrashEntity) {
+        viewModelScope.launch {
+            val success = repository.deletePermanentlyFromTrash(item)
+            if (success) {
+                emitMessage("Permanently deleted: ${item.originalFileName}")
+            } else {
+                emitMessage("Failed to delete item")
+            }
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            val success = repository.emptyTrash()
+            if (success) {
+                emitMessage("Trash emptied successfully")
+                refreshStorageVolumes()
+            } else {
+                emitMessage("Failed to empty Trash")
+            }
+        }
+    }
+
+    // Duplicate File Detection
+    fun scanForDuplicates() {
+        viewModelScope.launch {
+            _isScanningDuplicates.value = true
+            val duplicates = repository.findDuplicateFiles()
+            _duplicateGroups.value = duplicates
+            _isScanningDuplicates.value = false
+            emitMessage("Scan completed: Found ${duplicates.size} duplicate groups")
+        }
+    }
+
+    fun deleteDuplicateFile(file: File) {
+        viewModelScope.launch {
+            val success = repository.moveToTrash(file)
+            if (success) {
+                emitMessage("Duplicate moved to Trash: ${file.name}")
+                val updated = _duplicateGroups.value.mapNotNull { group ->
+                    val remaining = group.files.filter { it.absolutePath != file.absolutePath }
+                    if (remaining.size >= 2) group.copy(files = remaining) else null
+                }
+                _duplicateGroups.value = updated
+                refreshDirectory()
+                refreshStorageVolumes()
+            } else {
+                emitMessage("Failed to delete duplicate file")
+            }
+        }
+    }
+
+    // Creation operations (Folder, Text, Markdown, JSON, CSV)
+    fun createNewFile(name: String, fileType: String, content: String = "") {
+        viewModelScope.launch {
+            val trimmedName = name.trim()
+            val fullName = when {
+                trimmedName.contains(".") -> trimmedName
+                fileType.equals("markdown", ignoreCase = true) || fileType.equals("md", ignoreCase = true) -> "$trimmedName.md"
+                fileType.equals("json", ignoreCase = true) -> "$trimmedName.json"
+                fileType.equals("csv", ignoreCase = true) -> "$trimmedName.csv"
+                fileType.equals("folder", ignoreCase = true) -> trimmedName
+                else -> "$trimmedName.txt"
+            }
+            val success = if (fileType.equals("folder", ignoreCase = true)) {
+                repository.createFolder(_currentDirectory.value, fullName)
+            } else {
+                repository.createFile(_currentDirectory.value, fullName, content)
+            }
+            if (success) {
+                emitMessage("Created: $fullName")
+                refreshDirectory()
+            } else {
+                emitMessage("Failed to create $fullName (name already exists or invalid)")
+            }
+        }
+    }
+
+    fun createNewFolder(name: String) {
+        createNewFile(name, "folder")
     }
 
     fun renameFile(file: File, newName: String) {
@@ -390,45 +747,19 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun deleteFile(file: File) {
-        viewModelScope.launch {
-            val success = repository.deleteFile(file)
-            if (success) {
-                emitMessage("Deleted: ${file.name}")
-                refreshDirectory()
-                _selectedCategory.value?.let { loadCategoryFiles(it) }
-                refreshStorageVolumes()
-            } else {
-                emitMessage("Failed to delete file")
-            }
-        }
+        moveFileToTrash(file)
     }
 
     fun setClipboard(file: File, isCut: Boolean) {
         _clipboardFile.value = Pair(file, isCut)
+        _batchClipboard.value = BatchClipboard(listOf(file), isCut)
         emitMessage(if (isCut) "Cut: ${file.name}" else "Copied: ${file.name}")
     }
 
     fun pasteClipboard(targetDir: File = _currentDirectory.value) {
-        val clip = _clipboardFile.value ?: return
-        val (source, isCut) = clip
-        viewModelScope.launch {
-            val success = if (isCut) {
-                repository.moveFile(source, targetDir)
-            } else {
-                repository.copyFile(source, targetDir)
-            }
-            if (success) {
-                emitMessage(if (isCut) "Moved to ${targetDir.name}" else "Copied to ${targetDir.name}")
-                if (isCut) {
-                    _clipboardFile.value = null
-                }
-                refreshDirectory()
-                refreshStorageVolumes()
-            } else {
-                emitMessage("Failed to paste file")
-            }
-        }
+        pasteBatchClipboard(targetDir)
     }
+
 
     fun compressFiles(files: List<File>, zipName: String) {
         viewModelScope.launch {

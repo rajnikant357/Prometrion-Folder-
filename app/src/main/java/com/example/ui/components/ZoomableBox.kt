@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
@@ -77,6 +78,7 @@ fun ZoomableBox(
     val scaleAnim = remember { Animatable(1.0f) }
     val offsetXAnim = remember { Animatable(0f) }
     val offsetYAnim = remember { Animatable(0f) }
+    val rotationAnim = remember { Animatable(0f) }
 
     var boxSize by remember { mutableStateOf(Size.Zero) }
     var showHint by remember { mutableStateOf(showHintInitially) }
@@ -89,12 +91,13 @@ fun ZoomableBox(
         }
     }
 
-    // Reset zoom when resetKey changes (e.g., page navigation or file switch)
+    // Reset zoom and rotation when resetKey changes (e.g., page navigation or file switch)
     LaunchedEffect(resetKey) {
-        if (scaleAnim.value != 1.0f || offsetXAnim.value != 0f || offsetYAnim.value != 0f) {
+        if (scaleAnim.value != 1.0f || offsetXAnim.value != 0f || offsetYAnim.value != 0f || rotationAnim.value != 0f) {
             scaleAnim.snapTo(1.0f)
             offsetXAnim.snapTo(0f)
             offsetYAnim.snapTo(0f)
+            rotationAnim.snapTo(0f)
         }
     }
 
@@ -203,13 +206,14 @@ fun ZoomableBox(
             .testTag("zoomable_content_box"),
         contentAlignment = Alignment.Center
     ) {
-        // Scaled and translated inner content layer
+        // Scaled, rotated and translated inner content layer
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
                     scaleX = scaleAnim.value
                     scaleY = scaleAnim.value
+                    rotationZ = rotationAnim.value
                     translationX = offsetXAnim.value
                     translationY = offsetYAnim.value
                 },
@@ -334,21 +338,50 @@ fun ZoomableBox(
                         )
                     }
 
-                    // Reset / Fit Screen Button (Visible when zoomed)
+                    // Rotate Right Button (90 degrees)
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                val nextRot = (rotationAnim.value + 90f) % 360f
+                                rotationAnim.animateTo(
+                                    nextRot,
+                                    animationSpec = spring(dampingRatio = 0.8f, stiffness = 400f)
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("zoom_rotate_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RotateRight,
+                            contentDescription = "Rotate",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    // Reset / Fit Screen Button (Visible when zoomed or rotated)
+                    val isModified = isZoomed || rotationAnim.value != 0f
                     AnimatedVisibility(
-                        visible = isZoomed,
+                        visible = isModified,
                         enter = fadeIn(),
                         exit = fadeOut()
                     ) {
                         IconButton(
-                            onClick = { animateTo(1.0f, Offset.Zero) },
+                            onClick = {
+                                animateTo(1.0f, Offset.Zero)
+                                scope.launch {
+                                    rotationAnim.animateTo(0f, animationSpec = spring(dampingRatio = 0.8f, stiffness = 400f))
+                                }
+                            },
                             modifier = Modifier
                                 .size(36.dp)
                                 .testTag("zoom_reset_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.RestartAlt,
-                                contentDescription = "Reset Zoom",
+                                contentDescription = "Reset Zoom & Rotation",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )

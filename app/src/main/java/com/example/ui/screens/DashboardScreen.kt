@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.BrightnessMedium
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
@@ -76,6 +78,8 @@ fun DashboardScreen(
     onNavigateToSearch: () -> Unit,
     onNavigateToVault: () -> Unit,
     onNavigateToAnalyzer: () -> Unit,
+    onNavigateToTrash: () -> Unit,
+    onNavigateToDuplicates: () -> Unit,
     onNavigateToAbout: () -> Unit,
     onOpenFile: (File) -> Unit
 ) {
@@ -83,6 +87,8 @@ fun DashboardScreen(
     val recentFiles by viewModel.recentFiles.collectAsState()
     val clipboard by viewModel.clipboardFile.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
+    val trashItems by viewModel.trashItems.collectAsState()
+
 
     var showMenu by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -149,6 +155,40 @@ fun DashboardScreen(
                                     showMenu = false
                                 },
                                 modifier = Modifier.testTag("menu_theme_toggle")
+                            )
+
+                            // Recycle Bin
+                            DropdownMenuItem(
+                                text = { Text("Recycle Bin (${trashItems.size})") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onNavigateToTrash()
+                                },
+                                modifier = Modifier.testTag("menu_trash_button")
+                            )
+
+                            // Duplicate Finder
+                            DropdownMenuItem(
+                                text = { Text("Duplicate Finder") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.FindReplace,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onNavigateToDuplicates()
+                                },
+                                modifier = Modifier.testTag("menu_duplicates_button")
                             )
 
                             // Settings
@@ -330,6 +370,109 @@ fun DashboardScreen(
                     }
                 )
             }
+
+            // Quick Tools: Recycle Bin & Duplicate Finder
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Recycle Bin Card
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onNavigateToTrash() }
+                            .testTag("dashboard_trash_card"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Recycle Bin",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Text(
+                                    text = "${trashItems.size} items",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // Duplicate Finder Card
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onNavigateToDuplicates() }
+                            .testTag("dashboard_duplicates_card"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.FindReplace,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Duplicates",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Text(
+                                    text = "Free up space",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
 
             // 3. Recent Files Section
             if (recentFiles.isNotEmpty()) {

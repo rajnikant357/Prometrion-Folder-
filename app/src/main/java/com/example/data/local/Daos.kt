@@ -43,6 +43,9 @@ interface FavoriteDao {
     @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE path = :path)")
     fun isFavorite(path: String): Flow<Boolean>
 
+    @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE path = :path)")
+    suspend fun isFavoriteDirect(path: String): Boolean
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addFavorite(item: FavoriteEntity)
 
@@ -64,3 +67,25 @@ interface RecentDao {
     @Query("DELETE FROM recent_files")
     suspend fun clearAll()
 }
+
+@Dao
+interface TrashDao {
+    @Query("SELECT * FROM trash_items ORDER BY deletedAt DESC")
+    fun getAllTrash(): Flow<List<TrashEntity>>
+
+    @Query("SELECT COUNT(*) FROM trash_items")
+    fun getTrashCount(): Flow<Int>
+
+    @Query("SELECT * FROM trash_items WHERE id = :id LIMIT 1")
+    suspend fun getTrashById(id: Long): TrashEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: TrashEntity): Long
+
+    @Delete
+    suspend fun delete(item: TrashEntity)
+
+    @Query("DELETE FROM trash_items")
+    suspend fun clearAll()
+}
+

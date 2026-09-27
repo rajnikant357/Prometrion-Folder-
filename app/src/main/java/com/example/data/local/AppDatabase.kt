@@ -9,15 +9,18 @@ import androidx.room.RoomDatabase
     entities = [
         VaultEntity::class,
         FavoriteEntity::class,
-        RecentEntity::class
+        RecentEntity::class,
+        TrashEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun vaultDao(): VaultDao
     abstract fun favoriteDao(): FavoriteDao
     abstract fun recentDao(): RecentDao
+    abstract fun trashDao(): TrashDao
+
 
     companion object {
         @Volatile
