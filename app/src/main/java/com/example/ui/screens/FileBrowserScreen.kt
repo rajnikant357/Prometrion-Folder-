@@ -196,7 +196,7 @@ fun FileBrowserScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            text = if (currentDir.absolutePath == rootDir.absolutePath) "Internal Storage" else currentDir.name,
+                            text = if (viewModel.isStorageRoot(currentDir)) "Internal Storage" else currentDir.name,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                             maxLines = 1
                         )

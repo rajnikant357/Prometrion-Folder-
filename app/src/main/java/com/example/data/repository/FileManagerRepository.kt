@@ -875,6 +875,58 @@ class FileManagerRepository(
         success
     }
 
+    suspend fun unlockAndRestoreVaultItem(
+        vaultItem: VaultEntity,
+        pin: String,
+        restoreToOriginal: Boolean = true,
+        customDestinationDir: File? = null
+    ): File? = withContext(Dispatchers.IO) {
+        val encryptedFile = File(cryptoManager.getVaultDir(), vaultItem.vaultFileName)
+        if (!encryptedFile.exists()) return@withContext null
+
+        val targetDir: File = when {
+            !restoreToOriginal && customDestinationDir != null -> customDestinationDir
+            restoreToOriginal && vaultItem.originalPath.isNotBlank() -> {
+                val origFile = File(vaultItem.originalPath)
+                val parent = origFile.parentFile ?: File(getInternalStorageRoot(), "Documents")
+                if (!parent.exists()) parent.mkdirs()
+                parent
+            }
+            else -> {
+                val downloads = File(getInternalStorageRoot(), "Download")
+                if (!downloads.exists()) downloads.mkdirs()
+                downloads
+            }
+        }
+
+        var targetFile = File(targetDir, vaultItem.originalFileName)
+        if (targetFile.exists()) {
+            val baseName = vaultItem.originalFileName.substringBeforeLast(".")
+            val ext = if (vaultItem.originalFileName.contains(".")) ".${vaultItem.originalFileName.substringAfterLast(".")}" else ""
+            var count = 1
+            while (targetFile.exists()) {
+                targetFile = File(targetDir, "$baseName ($count)$ext")
+                count++
+            }
+        }
+
+        val success = cryptoManager.decryptToFile(
+            encryptedFile = encryptedFile,
+            destinationFile = targetFile,
+            pin = pin,
+            saltHex = vaultItem.saltHex,
+            ivHex = vaultItem.ivHex
+        )
+        if (success) {
+            cryptoManager.deleteEncryptedFile(vaultItem.vaultFileName)
+            vaultDao.delete(vaultItem)
+            recordRecent(targetFile)
+            targetFile
+        } else {
+            null
+        }
+    }
+
     suspend fun deleteVaultItem(vaultItem: VaultEntity): Boolean = withContext(Dispatchers.IO) {
         cryptoManager.deleteEncryptedFile(vaultItem.vaultFileName)
         vaultDao.delete(vaultItem)

@@ -35,12 +35,20 @@ fun BreadcrumbBar(
 ) {
     val scrollState = rememberScrollState()
 
-    // Build ancestor list from root to current
+    // Build ancestor list from root to current, stopping strictly at rootDir or system mount
     val pathSegments = mutableListOf<File>()
     var curr: File? = currentDir
     while (curr != null) {
         pathSegments.add(0, curr)
-        if (curr.absolutePath == rootDir.absolutePath || curr.parentFile == null) {
+        val isAtRoot = curr.absolutePath == rootDir.absolutePath ||
+                try { curr.canonicalPath == rootDir.canonicalPath } catch (_: Exception) { false }
+        val parentPath = curr.parentFile?.absolutePath
+        if (isAtRoot ||
+            curr.parentFile == null ||
+            parentPath == "/storage/emulated" ||
+            parentPath == "/storage" ||
+            parentPath == "/"
+        ) {
             break
         }
         curr = curr.parentFile
@@ -74,14 +82,20 @@ fun BreadcrumbBar(
 
         pathSegments.forEachIndexed { index, file ->
             val isLast = index == pathSegments.lastIndex
+            val isRootSegment = file.absolutePath == rootDir.absolutePath ||
+                    try { file.canonicalPath == rootDir.canonicalPath } catch (_: Exception) { false } ||
+                    file.parentFile?.absolutePath == "/storage/emulated"
+
             val displayName = when {
-                file.absolutePath == rootDir.absolutePath -> "Internal"
+                isRootSegment -> "Internal Storage"
                 file.name.isEmpty() -> "/"
                 else -> file.name
             }
 
             Surface(
-                onClick = { onNavigateTo(file) },
+                onClick = {
+                    if (isRootSegment) onNavigateTo(rootDir) else onNavigateTo(file)
+                },
                 shape = RoundedCornerShape(8.dp),
                 color = if (isLast) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.testTag("breadcrumb_segment_$displayName")

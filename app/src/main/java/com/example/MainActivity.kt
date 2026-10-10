@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.example.data.model.FileCategory
+import com.example.data.local.VaultEntity
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.CategoryScreen
 import com.example.ui.screens.DashboardScreen
@@ -91,7 +92,9 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
 
     var currentScreen by remember { mutableStateOf(Screen.DASHBOARD) }
     var returnScreenForPreview by remember { mutableStateOf(Screen.DASHBOARD) }
+    var returnScreenForBrowser by remember { mutableStateOf(Screen.DASHBOARD) }
     var previewFile by remember { mutableStateOf<File?>(null) }
+    var previewVaultEntity by remember { mutableStateOf<VaultEntity?>(null) }
     var activeCategory by remember { mutableStateOf<FileCategory?>(null) }
 
     LaunchedEffect(viewModel) {
@@ -129,6 +132,7 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                             currentScreen = Screen.CATEGORY
                         },
                         onNavigateToFolder = { folder ->
+                            returnScreenForBrowser = Screen.DASHBOARD
                             viewModel.navigateToDirectory(folder)
                             currentScreen = Screen.FILE_BROWSER
                         },
@@ -141,6 +145,7 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                         onOpenFile = { file ->
                             returnScreenForPreview = Screen.DASHBOARD
                             previewFile = file
+                            previewVaultEntity = null
                             currentScreen = Screen.PREVIEW
                         }
                     )
@@ -148,27 +153,19 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
 
 
                 Screen.FILE_BROWSER -> {
-                    val isSelectionMode by viewModel.isSelectionMode.collectAsState()
-                    BackHandler {
-                        if (isSelectionMode) {
-                            viewModel.clearSelection()
-                        } else if (!viewModel.navigateToParent()) {
-                            currentScreen = Screen.DASHBOARD
-                        }
-                    }
                     FileBrowserScreen(
                         viewModel = viewModel,
-                        onNavigateBack = { currentScreen = Screen.DASHBOARD },
+                        onNavigateBack = { currentScreen = returnScreenForBrowser },
                         onOpenFile = { file ->
                             returnScreenForPreview = Screen.FILE_BROWSER
                             previewFile = file
+                            previewVaultEntity = null
                             currentScreen = Screen.PREVIEW
                         }
                     )
                 }
 
                 Screen.CATEGORY -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     activeCategory?.let { cat ->
                         CategoryScreen(
                             category = cat,
@@ -177,6 +174,7 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                             onOpenFile = { file ->
                                 returnScreenForPreview = Screen.CATEGORY
                                 previewFile = file
+                                previewVaultEntity = null
                                 currentScreen = Screen.PREVIEW
                             }
                         )
@@ -186,66 +184,93 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                 }
 
                 Screen.SEARCH -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     SearchScreen(
                         viewModel = viewModel,
                         onNavigateBack = { currentScreen = Screen.DASHBOARD },
                         onOpenFile = { file ->
                             returnScreenForPreview = Screen.SEARCH
                             previewFile = file
+                            previewVaultEntity = null
                             currentScreen = Screen.PREVIEW
                         }
                     )
                 }
 
                 Screen.VAULT -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     VaultScreen(
                         viewModel = viewModel,
                         onNavigateBack = { currentScreen = Screen.DASHBOARD },
-                        onOpenFile = { file ->
+                        onOpenFile = { file, entity ->
                             returnScreenForPreview = Screen.VAULT
                             previewFile = file
+                            previewVaultEntity = entity
                             currentScreen = Screen.PREVIEW
                         },
                         onNavigateToBrowseForEncryption = {
+                            returnScreenForBrowser = Screen.VAULT
                             currentScreen = Screen.FILE_BROWSER
                         }
                     )
                 }
 
                 Screen.PREVIEW -> {
-                    BackHandler { currentScreen = returnScreenForPreview }
+                    BackHandler {
+                        currentScreen = returnScreenForPreview
+                        previewVaultEntity = null
+                    }
                     previewFile?.let { file ->
+                        val isVault = returnScreenForPreview == Screen.VAULT || previewVaultEntity != null
                         FilePreviewScreen(
                             file = file,
                             repository = viewModel.repository,
-                            onNavigateBack = { currentScreen = returnScreenForPreview },
+                            onNavigateBack = {
+                                currentScreen = returnScreenForPreview
+                                previewVaultEntity = null
+                            },
                             onMoveToVault = { f ->
                                 viewModel.moveFileToVault(f)
                                 currentScreen = returnScreenForPreview
+                                previewVaultEntity = null
+                            },
+                            isVaultItem = isVault,
+                            vaultItem = previewVaultEntity,
+                            onUnlockVaultItem = { restoreToOriginal ->
+                                previewVaultEntity?.let { entity ->
+                                    viewModel.unlockAndRestoreFromVault(entity, restoreToOriginal = restoreToOriginal)
+                                }
+                                try { file.delete() } catch (_: Exception) {}
+                                currentScreen = returnScreenForPreview
+                                previewVaultEntity = null
+                            },
+                            onDeleteVaultItem = {
+                                previewVaultEntity?.let { entity ->
+                                    viewModel.deleteFromVault(entity)
+                                }
+                                try { file.delete() } catch (_: Exception) {}
+                                currentScreen = returnScreenForPreview
+                                previewVaultEntity = null
                             }
                         )
                     } ?: run {
+                        previewVaultEntity = null
                         currentScreen = Screen.DASHBOARD
                     }
                 }
 
                 Screen.ANALYZER -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     StorageAnalyzerScreen(
                         viewModel = viewModel,
                         onNavigateBack = { currentScreen = Screen.DASHBOARD },
                         onOpenFile = { file ->
                             returnScreenForPreview = Screen.ANALYZER
                             previewFile = file
+                            previewVaultEntity = null
                             currentScreen = Screen.PREVIEW
                         }
                     )
                 }
 
                 Screen.TRASH -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     TrashScreen(
                         viewModel = viewModel,
                         onNavigateBack = { currentScreen = Screen.DASHBOARD }
@@ -253,13 +278,13 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                 }
 
                 Screen.DUPLICATES -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     DuplicatesScreen(
                         viewModel = viewModel,
                         onNavigateBack = { currentScreen = Screen.DASHBOARD },
                         onOpenFile = { file ->
                             returnScreenForPreview = Screen.DUPLICATES
                             previewFile = file
+                            previewVaultEntity = null
                             currentScreen = Screen.PREVIEW
                         }
                     )
@@ -277,7 +302,6 @@ fun VaultFilesApp(viewModel: FileManagerViewModel) {
                 }
 
                 Screen.ABOUT -> {
-                    BackHandler { currentScreen = Screen.DASHBOARD }
                     AboutScreen(
                         onNavigateBack = { currentScreen = Screen.DASHBOARD }
                     )

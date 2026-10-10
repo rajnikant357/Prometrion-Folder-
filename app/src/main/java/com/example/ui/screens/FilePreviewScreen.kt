@@ -20,6 +20,7 @@ import java.nio.charset.CodingErrorAction
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,9 +45,12 @@ import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.InstallMobile
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -54,7 +58,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,12 +71,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import com.example.data.local.VaultEntity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -123,12 +132,21 @@ fun FilePreviewScreen(
     repository: FileManagerRepository,
     onNavigateBack: () -> Unit,
     onMoveToVault: (File) -> Unit,
+    isVaultItem: Boolean = false,
+    vaultItem: VaultEntity? = null,
+    onUnlockVaultItem: ((restoreToOriginal: Boolean) -> Unit)? = null,
+    onDeleteVaultItem: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val formatInfo = remember(file) { FileOpener.identifyFormat(file) }
     val fileType = remember(file) { FileItem.determineFileType(file) }
     var showOpenWithDialog by remember { mutableStateOf(false) }
+
+    var showUnlockDialog by remember { mutableStateOf(false) }
+    var restoreToOriginalLocation by remember { mutableStateOf(true) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showInfoDialog by remember { mutableStateOf(false) }
 
     BackHandler { onNavigateBack() }
 
@@ -139,19 +157,249 @@ fun FilePreviewScreen(
         )
     }
 
+    // Vault Unlock / Unhide confirmation dialog
+    if (showUnlockDialog) {
+        val origPathDisplay = vaultItem?.let { File(it.originalPath).parent } ?: "Original location"
+        AlertDialog(
+            onDismissRequest = { showUnlockDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.LockOpen,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Unlock & Unhide File",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Decrypt \"${vaultItem?.originalFileName ?: file.name}\" and unhide it back to storage?",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { restoreToOriginalLocation = true }
+                            ) {
+                                RadioButton(
+                                    selected = restoreToOriginalLocation,
+                                    onClick = { restoreToOriginalLocation = true },
+                                    modifier = Modifier.testTag("preview_vault_unlock_radio_orig")
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Restore to Original Folder",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Text(
+                                        text = origPathDisplay,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { restoreToOriginalLocation = false }
+                            ) {
+                                RadioButton(
+                                    selected = !restoreToOriginalLocation,
+                                    onClick = { restoreToOriginalLocation = false },
+                                    modifier = Modifier.testTag("preview_vault_unlock_radio_downloads")
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Restore to Downloads Folder",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Text(
+                                        text = "Internal Storage / Download",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showUnlockDialog = false
+                        onUnlockVaultItem?.invoke(restoreToOriginalLocation)
+                    },
+                    modifier = Modifier.testTag("preview_vault_confirm_unlock_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LockOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Unlock & Unhide")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnlockDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Vault Delete confirmation dialog
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Delete Encrypted File?",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to permanently delete \"${vaultItem?.originalFileName ?: file.name}\" from your encrypted vault? This cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteDialog = false
+                        onDeleteVaultItem?.invoke()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier.testTag("preview_vault_confirm_delete_button")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Vault Info dialog
+    if (showInfoDialog) {
+        val propDateFormat = remember { SimpleDateFormat("MMM d, yyyy  HH:mm", Locale.getDefault()) }
+        AlertDialog(
+            onDismissRequest = { showInfoDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = { Text("Vault File Information") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column {
+                        Text("File Name", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            vaultItem?.originalFileName ?: file.name,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                    }
+                    Column {
+                        Text("Original Location", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            vaultItem?.originalPath ?: file.parent ?: "Internal Storage",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Column {
+                        Text("File Size", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            FileItem.formatFileSize(vaultItem?.originalSize ?: file.length()),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Column {
+                        Text("Encrypted On", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            propDateFormat.format(Date(vaultItem?.encryptedAt ?: file.lastModified())),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    vaultItem?.let {
+                        Column {
+                            Text("Category", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(it.category, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showInfoDialog = false },
+                    modifier = Modifier.testTag("preview_vault_close_info_button")
+                ) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text(
-                            text = file.name,
+                            text = vaultItem?.originalFileName ?: file.name,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${FileItem.formatFileSize(file.length())} • ${formatInfo.categoryName}",
+                            text = if (isVaultItem) {
+                                "${FileItem.formatFileSize(vaultItem?.originalSize ?: file.length())} • Vault Encrypted"
+                            } else {
+                                "${FileItem.formatFileSize(file.length())} • ${formatInfo.categoryName}"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -170,12 +418,28 @@ fun FilePreviewScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onMoveToVault(file) }) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Move to Vault",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (isVaultItem) {
+                        IconButton(
+                            onClick = { showUnlockDialog = true },
+                            modifier = Modifier.testTag("preview_vault_unlock_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LockOpen,
+                                contentDescription = "Unlock & Unhide",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { onMoveToVault(file) },
+                            modifier = Modifier.testTag("preview_lock_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Move to Vault",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     IconButton(
                         onClick = { FileShareUtils.shareFile(context, file) },
@@ -200,6 +464,67 @@ fun FilePreviewScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
+        },
+        bottomBar = {
+            if (isVaultItem) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 3.dp,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 32.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { showDeleteDialog = true },
+                            modifier = Modifier
+                                .testTag("preview_vault_delete_button")
+                                .size(52.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Delete",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = { showInfoDialog = true },
+                            modifier = Modifier
+                                .testTag("preview_vault_info_button")
+                                .size(52.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Info",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Info",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Box(

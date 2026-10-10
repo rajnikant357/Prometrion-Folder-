@@ -236,7 +236,59 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun isForbiddenSystemDir(file: File): Boolean {
+        val path = file.absolutePath
+        return path == "/storage/emulated" ||
+                path == "/storage" ||
+                path == "/" ||
+                path == "/system" ||
+                path == "/vendor" ||
+                path == "/data" ||
+                path.endsWith("/emulated")
+    }
+
+    fun isStorageRoot(directory: File): Boolean {
+        val internalRoot = repository.getInternalStorageRoot()
+        try {
+            if (directory.canonicalPath == internalRoot.canonicalPath || directory.absolutePath == internalRoot.absolutePath) {
+                return true
+            }
+        } catch (_: Exception) {
+            if (directory.absolutePath == internalRoot.absolutePath) return true
+        }
+
+        for (volume in _storageVolumes.value) {
+            try {
+                val volFile = File(volume.path)
+                if (directory.canonicalPath == volFile.canonicalPath || directory.absolutePath == volFile.absolutePath) {
+                    return true
+                }
+            } catch (_: Exception) {
+                if (directory.absolutePath == volume.path) return true
+            }
+        }
+
+        // If directory's parent is null, doesn't exist, or is the internal Android system mount /storage/emulated or /storage
+        val parent = directory.parentFile
+        if (parent == null || isForbiddenSystemDir(parent) || !parent.exists()) {
+            return true
+        }
+
+        return false
+    }
+
+    fun resetToStorageRoot() {
+        val root = repository.getInternalStorageRoot()
+        _currentDirectory.value = root
+        _forwardStack.clear()
+        _backStack.clear()
+        _canGoForward.value = false
+        clearSelection()
+        refreshDirectory()
+    }
+
     fun navigateToDirectory(directory: File, addToHistory: Boolean = true) {
+        if (isForbiddenSystemDir(directory)) return
         if (directory.absolutePath == _currentDirectory.value.absolutePath) return
         if (addToHistory) {
             _backStack.add(_currentDirectory.value)
@@ -254,17 +306,23 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
             return true
         }
         val current = _currentDirectory.value
-        val parent = current.parentFile
-        val root = repository.getInternalStorageRoot().parentFile
-        if (parent != null && parent.exists() && parent != root?.parentFile) {
-            _forwardStack.add(current)
-            _canGoForward.value = true
-            _currentDirectory.value = parent
-            clearSelection()
-            refreshDirectory()
-            return true
+        // If current is already at or above storage root, stop and let caller handle back navigation
+        if (isStorageRoot(current)) {
+            return false
         }
-        return false
+
+        val parent = current.parentFile ?: return false
+        // Stop if parent is a forbidden system mount point like /storage/emulated, /storage, or /
+        if (isForbiddenSystemDir(parent) || !parent.exists() || !parent.canRead()) {
+            return false
+        }
+
+        _forwardStack.add(current)
+        _canGoForward.value = true
+        _currentDirectory.value = parent
+        clearSelection()
+        refreshDirectory()
+        return true
     }
 
     fun navigateForward(): Boolean {
@@ -435,9 +493,62 @@ class FileManagerViewModel(application: Application) : AndroidViewModel(applicat
             if (success) {
                 emitMessage("File decrypted and exported to ${destinationDir.name}")
                 refreshDirectory()
+                _selectedCategory.value?.let { loadCategoryFiles(it) }
             } else {
                 emitMessage("Failed to decrypt file")
             }
+        }
+    }
+
+    fun unlockAndRestoreFromVault(
+        vaultItem: VaultEntity,
+        restoreToOriginal: Boolean = true,
+        customDir: File? = null
+    ) {
+        val pin = _vaultState.value.unlockedPin
+        if (pin == null) {
+            emitMessage("Unlock vault with PIN first")
+            return
+        }
+        viewModelScope.launch {
+            val restoredFile = repository.unlockAndRestoreVaultItem(
+                vaultItem = vaultItem,
+                pin = pin,
+                restoreToOriginal = restoreToOriginal,
+                customDestinationDir = customDir
+            )
+            if (restoredFile != null) {
+                emitMessage("Unlocked & restored to ${restoredFile.parentFile?.name ?: "storage"}: ${restoredFile.name}")
+                refreshDirectory()
+                _selectedCategory.value?.let { loadCategoryFiles(it) }
+            } else {
+                emitMessage("Failed to unlock and decrypt file")
+            }
+        }
+    }
+
+    fun unlockAndRestoreBatch(
+        items: List<VaultEntity>,
+        restoreToOriginal: Boolean = true
+    ) {
+        val pin = _vaultState.value.unlockedPin
+        if (pin == null) {
+            emitMessage("Unlock vault with PIN first")
+            return
+        }
+        viewModelScope.launch {
+            var count = 0
+            for (item in items) {
+                val restored = repository.unlockAndRestoreVaultItem(
+                    vaultItem = item,
+                    pin = pin,
+                    restoreToOriginal = restoreToOriginal
+                )
+                if (restored != null) count++
+            }
+            emitMessage("Unlocked and restored $count files from vault")
+            refreshDirectory()
+            _selectedCategory.value?.let { loadCategoryFiles(it) }
         }
     }
 
